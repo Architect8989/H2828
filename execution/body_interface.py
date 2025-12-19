@@ -13,23 +13,24 @@ Absolute constraints:
 - NO OS or application assumptions
 - NO hidden state maintenance
 - NO intent interpretation
+- NO logging or side effects
+- NO timestamp generation (timestamps must be provided externally)
+- NO policy decisions
+
+UUIDs are generated for mechanical traceability only; no semantic meaning.
+WAIT is implemented as a mechanical timing operation, but introduces wall-clock coupling.
+Execution timing must be managed externally.
 
 This module is the muscle socket only - boring, auditable, and replaceable.
 """
 
-import logging
-import time
 from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError, Field, validator, ConfigDict
-
-# Configure audit logging
-logger = logging.getLogger(__name__)
-EXECUTION_LOG_LEVEL = logging.INFO
+from pydantic import BaseModel, Field, validator, ConfigDict
 
 
 class ActionType(str, Enum):
@@ -74,9 +75,12 @@ class ConcreteAction(BaseModel):
     )
     
     # Core identification
-    action_id: str = Field(default_factory=lambda: str(uuid4()))
+    action_id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        description="Generated for mechanical traceability only; no semantic meaning"
+    )
     action_type: ActionType
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None  # Must be provided by caller if needed
     
     # Position parameters (only for position-based actions)
     x: Optional[int] = Field(None, ge=0)
@@ -85,7 +89,7 @@ class ConcreteAction(BaseModel):
     
     # Mouse parameters (only for mouse actions)
     button: Optional[MouseButton] = None
-    clicks: Optional[int] = Field(None, ge=1, le=10)  # Arbitrary but reasonable upper bound
+    clicks: Optional[int] = Field(None, ge=1)  # Minimum 1, no upper bound
     
     # Keyboard parameters (only for keyboard actions)
     key: Optional[str] = None
@@ -94,11 +98,11 @@ class ConcreteAction(BaseModel):
     dx: Optional[int] = None  # Horizontal scroll units
     dy: Optional[int] = None  # Vertical scroll units
     
-    # Wait parameters (only for wait actions)
-    duration_ms: Optional[int] = Field(None, ge=0, le=300000)  # Max 5 minutes
+    # Wait parameters (only for wait actions) - duration in milliseconds
+    duration_ms: Optional[int] = Field(None, ge=0)  # Non-negative only
     
     # Execution metadata (not interpreted)
-    confidence: Optional[float] = Field(None, ge=0, le=1)  # From brain, not used for decisions
+    confidence: Optional[float] = None  # Opaque metadata; numeric convertibility not validated
     
     @validator('action_type')
     def validate_required_fields_by_type(cls, v: ActionType, values: Dict[str, Any]) -> ActionType:
@@ -144,6 +148,11 @@ class ConcreteAction(BaseModel):
         return v
 
 
+class ExecutionBackendError(RuntimeError):
+    """Exception raised when backend execution fails."""
+    pass
+
+
 class ExecutionResult(BaseModel):
     """
     Mechanical execution result only.
@@ -159,12 +168,10 @@ class ExecutionResult(BaseModel):
     
     # Identification
     action_id: str
-    execution_id: str = Field(default_factory=lambda: str(uuid4()))
-    
-    # Timing (mechanical only)
-    timestamp_start: datetime
-    timestamp_end: datetime
-    duration_ms: int = Field(..., ge=0)
+    execution_id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        description="Generated for mechanical traceability only; no semantic meaning"
+    )
     
     # Mechanical execution status
     executed: bool = Field(...)  # Whether the backend attempted execution
@@ -172,27 +179,6 @@ class ExecutionResult(BaseModel):
     
     # Backend-specific raw output (no interpretation)
     raw_output: Dict[str, Any] = Field(default_factory=dict)
-    
-    @validator('duration_ms')
-    def validate_duration(cls, v: int, values: Dict[str, Any]) -> int:
-        """Validate duration is non-negative and consistent with timestamps."""
-        if v < 0:
-            raise ValueError(f"Duration must be non-negative, got {v}ms")
-        
-        # Calculate actual duration from timestamps for consistency check
-        if 'timestamp_start' in values and 'timestamp_end' in values:
-            start = values['timestamp_start']
-            end = values['timestamp_end']
-            calculated_ms = int((end - start).total_seconds() * 1000)
-            
-            # Allow small rounding differences (up to 10ms)
-            if abs(v - calculated_ms) > 10:
-                logger.warning(
-                    f"Duration mismatch: specified={v}ms, "
-                    f"calculated={calculated_ms}ms from timestamps"
-                )
-        
-        return v
 
 
 class BodyBackend(ABC):
@@ -316,6 +302,21 @@ class BodyBackend(ABC):
             Raw backend output with no interpretation
         """
         pass
+    
+    @abstractmethod
+    def wait(self, duration_ms: int) -> Dict[str, Any]:
+        """
+        Wait for specified duration.
+        
+        Note: This is a mechanical timing operation that introduces wall-clock coupling.
+        
+        Args:
+            duration_ms: Duration to wait in milliseconds
+        
+        Returns:
+            Raw backend output with no interpretation
+        """
+        pass
 
 
 class BodyInterface:
@@ -326,7 +327,6 @@ class BodyInterface:
     1. Validates action structure
     2. Executes exactly once via backend
     3. Captures mechanical execution results
-    4. Logs for auditability
     
     This class does NOT:
     1. Decide what action to take
@@ -335,22 +335,22 @@ class BodyInterface:
     4. Infer success or failure
     5. Interpret intent or correctness
     6. Maintain state between calls
+    7. Log or produce side effects
+    8. Generate timestamps or policy decisions
+    9. Measure execution timing
     """
     
-    def __init__(self, backend: BodyBackend, execution_log_level: int = EXECUTION_LOG_LEVEL) -> None:
+    def __init__(self, backend: BodyBackend) -> None:
         """
         Initialize body interface with backend.
         
         Args:
             backend: Concrete backend implementation (e.g., OpenCU)
-            execution_log_level: Logging level for execution audit
         """
         if not isinstance(backend, BodyBackend):
             raise TypeError(f"Backend must implement BodyBackend, got {type(backend)}")
         
         self._backend = backend
-        self._logger = logging.getLogger(f"{__name__}.BodyInterface")
-        self._execution_log_level = execution_log_level
     
     def execute_action(self, action: ConcreteAction) -> ExecutionResult:
         """
@@ -363,22 +363,17 @@ class BodyInterface:
             ExecutionResult with mechanical execution details only
         
         Raises:
-            ValidationError: If action fails schema validation
             ValueError: If action cannot be executed due to structural issues
-            RuntimeError: If backend execution fails (exact error preserved)
+            ExecutionBackendError: If backend execution fails
         
         Note:
             - No retry on failure
             - No interpretation of results
             - No state maintained between calls
             - Exact one-time execution only
+            - No logging or side effects
+            - No timing measurements
         """
-        # Log action for auditability
-        self._log_action_received(action)
-        
-        # Start execution timing
-        timestamp_start = datetime.utcnow()
-        
         try:
             # Execute based on action type
             # Note: This branching is mechanical dispatch only, not decision-making
@@ -392,32 +387,16 @@ class BodyInterface:
             executed = False
             backend_error = f"{type(e).__name__}: {str(e)}"
             
-            # Log execution failure (mechanical only)
-            self._log_execution_failure(action, e)
-            
-            # Re-raise with original error context
-            raise RuntimeError(f"Backend execution failed for action {action.action_id}: {str(e)}") from e
-        
-        finally:
-            # End execution timing
-            timestamp_end = datetime.utcnow()
-        
-        # Calculate duration
-        duration_ms = int((timestamp_end - timestamp_start).total_seconds() * 1000)
+            # Raise typed backend error
+            raise ExecutionBackendError(f"Backend execution failed: {str(e)}") from e
         
         # Create execution result (mechanical facts only)
         result = ExecutionResult(
             action_id=action.action_id,
-            timestamp_start=timestamp_start,
-            timestamp_end=timestamp_end,
-            duration_ms=duration_ms,
             executed=executed,
             backend_error=backend_error,
             raw_output=raw_output
         )
-        
-        # Log execution result for auditability
-        self._log_execution_result(action, result)
         
         return result
     
@@ -427,6 +406,7 @@ class BodyInterface:
         
         Note: This is mechanical dispatch only, not decision-making.
         Each branch corresponds to a different physical operation.
+        WAIT is delegated to backend for consistency.
         """
         if action.action_type == ActionType.MOUSE_MOVE:
             return self._backend.move_mouse(
@@ -479,64 +459,23 @@ class BodyInterface:
             )
         
         elif action.action_type == ActionType.WAIT:
-            # Wait is implemented here since it's backend-agnostic
-            # But still treated as a mechanical operation
-            time.sleep(action.duration_ms / 1000.0)  # type: ignore
-            return {"wait_completed": True, "duration_ms": action.duration_ms}
+            return self._backend.wait(
+                duration_ms=action.duration_ms  # type: ignore
+            )
         
         else:
             # This should never happen due to ActionType enum validation
             raise ValueError(f"Unsupported action type: {action.action_type}")
-    
-    def _log_action_received(self, action: ConcreteAction) -> None:
-        """Log action receipt for auditability."""
-        log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "operation": "action_received",
-            "action_id": action.action_id,
-            "action_type": action.action_type.value,
-            "parameters": action.dict(exclude={"action_id", "action_type", "timestamp", "confidence"})
-        }
-        
-        self._logger.log(self._execution_log_level, "Action received for execution", extra=log_data)
-    
-    def _log_execution_failure(self, action: ConcreteAction, error: Exception) -> None:
-        """Log execution failure for auditability (mechanical facts only)."""
-        log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "operation": "execution_failed",
-            "action_id": action.action_id,
-            "action_type": action.action_type.value,
-            "error_type": type(error).__name__,
-            "error_message": str(error)
-        }
-        
-        self._logger.log(self._execution_log_level, "Action execution failed", extra=log_data)
-    
-    def _log_execution_result(self, action: ConcreteAction, result: ExecutionResult) -> None:
-        """Log execution result for auditability (mechanical facts only)."""
-        log_data = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "operation": "execution_completed",
-            "action_id": action.action_id,
-            "execution_id": result.execution_id,
-            "action_type": action.action_type.value,
-            "executed": result.executed,
-            "duration_ms": result.duration_ms,
-            "backend_error": result.backend_error
-        }
-        
-        self._logger.log(self._execution_log_level, "Action execution completed", extra=log_data)
 
 
 # Export public interface
 __all__ = [
     "BodyInterface",
     "BodyBackend",
+    "ExecutionBackendError",
     "ConcreteAction",
     "ExecutionResult",
     "ActionType",
     "MouseButton",
-    "CoordinateSystem",
-    "EXECUTION_LOG_LEVEL"
+    "CoordinateSystem"
 ]
