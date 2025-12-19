@@ -1,0 +1,68 @@
+# config.yaml
+# Static wiring configuration for Environment Mastery Engine (EME)
+# This file selects which organs are plugged into sockets, not how the organism thinks.
+# All values are mechanical selections with no semantic interpretation.
+
+# Brain backend configuration
+# Selects which LLM backend processes reasoning
+brain:
+  backend: "deepseek"  # Available: deepseek
+  parameters:
+    model: "deepseek-chat"  # Model identifier for selected backend
+    temperature: 1.0  # Fixed baseline parameter (not tuned for behavior)
+    max_tokens: 4096  # Maximum tokens per response
+    timeout_seconds: 30  # Request timeout
+  environment_variables:
+    api_key: "DEEPSEEK_API_KEY"  # Reference to environment variable
+
+# Vision backend configuration
+# Lists which perception backends are active
+vision:
+  enabled_backends:
+    - "ocr"  # Available: ocr
+  ocr:
+    engines:
+      - "paddleocr"  # Primary OCR engine
+      - "tesseract"  # Secondary OCR engine
+    parameters:
+      paddleocr_lang: "en"  # Language parameter (no semantic validation)
+      tesseract_path: null  # Optional path to tesseract binary
+    screen_capture:
+      backend: "mss"  # Available: mss, pil
+      timeout_ms: 5000  # Capture timeout
+
+# Body backend configuration
+# Selects which actuation backend controls mouse/keyboard
+body:
+  backend: "opencu"  # Available: opencu
+  parameters:
+    coordinate_system: "absolute"  # absolute or relative
+    action_timeout_ms: 10000  # Per-action timeout
+  environment_variables:
+    display: "DISPLAY"  # Reference to X11 display variable
+
+# Execution runtime parameters
+# Mechanical timing and logging controls
+runtime:
+  loop:
+    iteration_timeout_ms: 30000  # Maximum time per perception→action cycle
+    shutdown_timeout_ms: 5000  # Graceful shutdown timeout
+  logging:
+    level: "INFO"  # Available: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    audit_level: "INFO"  # Level for audit trails
+  network:
+    connect_timeout_ms: 10000  # Network connection timeout
+    read_timeout_ms: 30000  # Network read timeout
+
+# File paths and directories
+# Mechanical storage locations
+paths:
+  logs: "./logs"  # Log file directory
+  data: "./data"  # General data directory
+
+# Bootstrap configuration
+# Installation and verification parameters
+bootstrap:
+  install_timeout_seconds: 600  # Maximum installation time
+  verification_timeout_seconds: 30  # Per-verification step timeout
+  cleanup_on_failure: false  # Whether to clean up on installation failure
