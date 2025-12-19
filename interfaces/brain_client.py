@@ -1,88 +1,122 @@
 """
-Brain client module - Stateless interface between cognitive system and reasoning model.
+Brain client - Stateless reasoning interface for Environment Mastery Engine.
 
-This module provides a pure mechanical interface for exchanging structured state information
-with a reasoning model (LLM). It contains zero intelligence, zero behavior, and zero assumptions
-about the system's goals, environment, or operational context.
+This module provides a deterministic, zero-intelligence socket between
+perception systems and reasoning backends. It contains no cognition,
+no goals, no planning, and no environment awareness.
 
-Key Principles:
-- Stateless between calls
-- Deterministic behavior
-- Model-agnostic backend support
-- Explicit input/output validation
-- No interpretation or modification of reasoning
-- No injection of domain knowledge or heuristics
-
-What this module DOES:
-1. Validates structured input describing system state
-2. Transfers validated input to configured model backend
-3. Receives raw structured output from model
-4. Validates output matches declared schema
-5. Returns output unchanged
-6. Logs all inputs/outputs verbatim
-
-What this module DOES NOT do:
-- Decide what the system should do next
-- Modify, filter, rank, or sanitize reasoning
-- Inject domain knowledge, goals, or tasks
-- Encode safety, fallback, or exploration logic
-- Maintain hidden state between calls
-- Optimize, retry, or correct model outputs
-- Encode success/failure semantics
-- Assume anything about OS, UI, or user intent
-- Help the model "decide better"
-- Encode workflows, policies, or heuristics
-- Apply defaults that imply behavior
-
-All intelligence and decision-making resides exclusively in the reasoning model.
+Key invariants:
+1. One call in → one call out
+2. No memory of previous calls
+3. No modification of reasoning content
+4. Fail immediately on any misconfiguration
+5. No silent behavior or hidden state
 """
 
 import json
-import logging
-from typing import Any, Dict, Protocol, runtime_checkable
-from datetime import datetime
+from typing import Any, Optional
+from enum import Enum
+from dataclasses import dataclass
+import httpx
 
-from pydantic import BaseModel, ValidationError, ConfigDict, Field
-from pydantic.dataclasses import dataclass as pydantic_dataclass
+from pydantic import BaseModel, ValidationError, Field, ConfigDict
 
-# Configure audit logging
-_AUDIT_LOGGER = logging.getLogger("brain_client_audit")
-_AUDIT_LOGGER.setLevel(logging.INFO)
+# -------------------------------------------------------------------
+# Configuration
+# -------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class DeepSeekConfig:
+    """Explicit configuration for DeepSeek backend.
+    
+    Frozen to prevent mutation.
+    Contains only authentication and routing parameters.
+    """
+    api_key: str
+    base_url: str = "https://api.deepseek.com/v1"
+    model_name: str = "deepseek-chat"
+
+
+class BackendType(str, Enum):
+    """Explicit backend selection enum.
+    
+    Only supported backends are enumerated.
+    No placeholders or future hooks.
+    """
+    DEEPSEEK = "deepseek"
+
+
+@dataclass(frozen=True)
+class BrainClientConfig:
+    """Complete configuration for brain client.
+    
+    All fields are required to prevent ambiguous behavior.
+    Frozen to enforce statelessness.
+    """
+    backend_type: BackendType
+    deepseek_config: Optional[DeepSeekConfig] = None
+    timeout_seconds: float = 30.0
+    max_tokens: int = 4000
+    temperature: float = 0.0
+    
+    def __post_init__(self) -> None:
+        """Validate configuration at construction.
+        
+        Raises:
+            ValueError: If configuration is invalid or inconsistent
+        """
+        if self.backend_type == BackendType.DEEPSEEK and not self.deepseek_config:
+            raise ValueError("DeepSeek backend requires deepseek_config")
+        
+        if self.timeout_seconds <= 0:
+            raise ValueError(f"timeout_seconds must be positive, got {self.timeout_seconds}")
+        
+        if self.max_tokens <= 0:
+            raise ValueError(f"max_tokens must be positive, got {self.max_tokens}")
+        
+        if not 0.0 <= self.temperature <= 2.0:
+            raise ValueError(f"temperature must be between 0.0 and 2.0, got {self.temperature}")
 
 
 # -------------------------------------------------------------------
-# Input/Output Schema Definitions
+# Data Models
 # -------------------------------------------------------------------
 
 class PerceivedState(BaseModel):
-    """Structured representation of current system state perception.
+    """Current system state as perceived by upstream systems.
     
-    This is a passive container for already-interpreted state information.
-    No validation implies behavior or correct interpretation.
+    Contains no validation that implies correct interpretation.
     """
     model_config = ConfigDict(extra='forbid')
     
-    sensory_inputs: Dict[str, Any] = Field(
-        description="Raw sensory inputs as interpreted by upstream systems"
+    sensory_inputs: dict[str, Any] = Field(
+        description="Raw sensory inputs from perception systems",
+        min_items=0
     )
-    processed_observations: Dict[str, Any] = Field(
-        description="Processed observations from perception systems"
+    processed_observations: dict[str, Any] = Field(
+        description="Processed observations from perception pipeline",
+        min_items=0
     )
-    telemetry: Dict[str, float] = Field(
-        description="Current system telemetry readings"
+    telemetry: dict[str, float] = Field(
+        description="System telemetry readings",
+        min_items=0
     )
 
 
 class RecentAction(BaseModel):
     """Record of a recently executed action.
     
-    Contains only what was done, not whether it was correct or successful.
+    Contains only execution record, no success/failure semantics.
+    Timestamps are opaque data passed through from upstream systems.
     """
     model_config = ConfigDict(extra='forbid')
     
     action_type: str = Field(description="Type identifier for the action")
-    parameters: Dict[str, Any] = Field(description="Parameters used in action execution")
-    timestamp: datetime = Field(description="When the action was initiated")
+    parameters: dict[str, Any] = Field(
+        description="Parameters used in action execution",
+        min_items=0
+    )
+    timestamp: str = Field(description="Opaque timestamp from upstream systems")
 
 
 class MemorySnapshot(BaseModel):
@@ -93,22 +127,25 @@ class MemorySnapshot(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
     
-    active_recall: Dict[str, Any] = Field(
-        description="Currently active memory recalls"
+    active_recall: dict[str, Any] = Field(
+        description="Currently active memory recalls",
+        min_items=0
     )
-    recent_patterns: Dict[str, Any] = Field(
-        description="Recently observed patterns"
+    recent_patterns: dict[str, Any] = Field(
+        description="Recently observed patterns",
+        min_items=0
     )
-    contextual_tags: Dict[str, Any] = Field(
-        description="Contextual tags applied by memory system"
+    contextual_tags: dict[str, Any] = Field(
+        description="Contextual tags applied by memory system",
+        min_items=0
     )
 
 
 class BrainInput(BaseModel):
     """Complete input structure sent to reasoning model.
     
-    This is the entire input contract with the model.
     All fields are required to enforce explicit communication.
+    No defaults imply behavior.
     """
     model_config = ConfigDict(extra='forbid')
     
@@ -123,31 +160,34 @@ class BrainInput(BaseModel):
         description="Current short-term memory contents"
     )
     request_id: str = Field(
-        description="Unique identifier for this reasoning request"
+        description="Unique identifier for this reasoning request",
+        min_length=1
     )
+
+
+# Type alias for clarity in backend interface
+RawModelResponse = dict[str, Any]
 
 
 class ModelResponse(BaseModel):
     """Expected response structure from reasoning model.
     
-    This defines the output contract only. No validation implies
-    correctness, appropriateness, or safety of the response.
+    Validates form only, not content correctness, safety, or appropriateness.
+    No constraints are placed on content richness of untrusted model output.
     """
     model_config = ConfigDict(extra='forbid')
     
-    reasoning_artifacts: Dict[str, Any] = Field(
-        description="Model's internal reasoning artifacts",
-        min_items=1
+    reasoning_artifacts: dict[str, Any] = Field(
+        description="Model's internal reasoning artifacts"
     )
-    selected_actions: list[Dict[str, Any]] = Field(
+    selected_actions: list[dict[str, Any]] = Field(
         description="Actions to execute, in proposed order",
         min_items=0
     )
-    attention_focus: Dict[str, float] = Field(
-        description="Attention weights for next perception cycle",
-        min_items=1
+    attention_focus: dict[str, float] = Field(
+        description="Attention weights for next perception cycle"
     )
-    memory_updates: Dict[str, Any] = Field(
+    memory_updates: dict[str, Any] = Field(
         description="Proposed updates to memory systems",
         min_items=0
     )
@@ -159,50 +199,207 @@ class ModelResponse(BaseModel):
 
 
 # -------------------------------------------------------------------
-# Backend Protocol
+# Backend Protocol and Implementations
 # -------------------------------------------------------------------
 
-@runtime_checkable
-class ModelBackend(Protocol):
-    """Protocol for model backend implementations.
+class BackendError(Exception):
+    """Base exception for backend failures.
     
-    This allows swapping different reasoning models without
-    changing the client interface.
+    Raised immediately on any backend communication issue.
+    """
+
+
+class BackendTimeoutError(BackendError):
+    """Raised when backend call exceeds timeout."""
+
+
+class BackendValidationError(BackendError):
+    """Raised when backend returns invalid response."""
+
+
+class ModelBackend:
+    """Abstract base class for model backends.
+    
+    Concrete implementations must not modify, filter, or interpret
+    input/output content.
+    
+    Note: Timeout policy is owned by the caller; backend only applies 
+    the provided timeout value.
     """
     
-    def generate(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def generate(
+        self, 
+        input_data: dict[str, Any], 
+        timeout_seconds: float,
+        max_tokens: int,
+        temperature: float
+    ) -> RawModelResponse:
         """Generate response from reasoning model.
         
         Args:
             input_data: Validated BrainInput as dictionary
+            timeout_seconds: Maximum time allowed for the call (policy owned by caller)
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature for generation
             
         Returns:
             Raw model response as dictionary
             
+        Raises:
+            BackendError: On any communication or validation failure
+            BackendTimeoutError: If call exceeds provided timeout
+            
         Note:
-            Backend must NOT modify or interpret the input.
-            Backend must NOT apply any post-processing to output.
+            Must not apply retries, caching, or content modification.
         """
-        ...
+        raise NotImplementedError
 
 
-# -------------------------------------------------------------------
-# Configuration
-# -------------------------------------------------------------------
-
-@pydantic_dataclass
-class BrainClientConfig:
-    """Configuration for brain client.
+class DeepSeekBackend(ModelBackend):
+    """Concrete backend for DeepSeek API.
     
-    Contains only mechanical settings. No behavioral defaults.
+    Contains zero prompt engineering, zero content modification,
+    and zero retry logic.
+    
+    Note: Timeout policy is owned by the caller; backend only applies 
+    the provided timeout value.
     """
-    model_backend: ModelBackend = Field(
-        description="Model backend implementation"
-    )
-    enable_audit_logging: bool = Field(
-        default=True,
-        description="Whether to log all inputs/outputs verbatim"
-    )
+    
+    def __init__(self, config: DeepSeekConfig):
+        """Initialize DeepSeek backend.
+        
+        Args:
+            config: Complete DeepSeek configuration
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        if not config.api_key:
+            raise ValueError("DeepSeek API key is required")
+        
+        self.config = config
+    
+    def generate(
+        self, 
+        input_data: dict[str, Any], 
+        timeout_seconds: float,
+        max_tokens: int,
+        temperature: float
+    ) -> RawModelResponse:
+        """Call DeepSeek API with raw input.
+        
+        Args:
+            input_data: Validated BrainInput as dictionary
+            timeout_seconds: Maximum time allowed for the call (policy owned by caller)
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature for generation
+            
+        Returns:
+            Raw API response as dictionary
+            
+        Raises:
+            BackendError: On any API or network failure
+            BackendTimeoutError: If call exceeds provided timeout
+            BackendValidationError: If response format is invalid
+        """
+        # Create a new HTTP client for each request
+        with httpx.Client(timeout=timeout_seconds) as client:
+            try:
+                # Convert input to JSON string - no modification, no sanitization
+                request_body = {
+                    "model": self.config.model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": json.dumps(input_data)
+                        }
+                    ],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                }
+                
+                headers = {
+                    "Authorization": f"Bearer {self.config.api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Single attempt only - no retries
+                response = client.post(
+                    f"{self.config.base_url}/chat/completions",
+                    json=request_body,
+                    headers=headers
+                )
+                
+                # Check HTTP status
+                response.raise_for_status()
+                
+                # Parse and validate response structure
+                result = response.json()
+                
+                # Defensive parsing of external API response
+                try:
+                    if not isinstance(result, dict):
+                        raise BackendValidationError(
+                            f"Backend response is not a dictionary: {type(result)}"
+                        )
+                    
+                    if "choices" not in result:
+                        raise BackendValidationError("Missing 'choices' in backend response")
+                    
+                    if not isinstance(result["choices"], list) or len(result["choices"]) == 0:
+                        raise BackendValidationError(
+                            f"'choices' must be non-empty list, got {type(result['choices'])}"
+                        )
+                    
+                    first_choice = result["choices"][0]
+                    if not isinstance(first_choice, dict):
+                        raise BackendValidationError(
+                            f"First choice is not a dictionary: {type(first_choice)}"
+                        )
+                    
+                    if "message" not in first_choice:
+                        raise BackendValidationError("Missing 'message' in choice")
+                    
+                    message = first_choice["message"]
+                    if not isinstance(message, dict):
+                        raise BackendValidationError(
+                            f"Message is not a dictionary: {type(message)}"
+                        )
+                    
+                    if "content" not in message:
+                        raise BackendValidationError("Missing 'content' in message")
+                    
+                    content_str = message["content"]
+                    if not isinstance(content_str, str):
+                        raise BackendValidationError(
+                            f"Content is not a string: {type(content_str)}"
+                        )
+                    
+                    # Parse JSON with explicit error handling
+                    try:
+                        return json.loads(content_str)
+                    except json.JSONDecodeError as e:
+                        raise BackendValidationError(
+                            f"Backend response content is not valid JSON: {str(e)}"
+                        ) from e
+                    
+                except (KeyError, IndexError, TypeError) as e:
+                    raise BackendValidationError(
+                        f"Backend response structure validation failed: {str(e)}"
+                    ) from e
+                    
+            except httpx.TimeoutException as e:
+                raise BackendTimeoutError(
+                    f"Backend timeout after {timeout_seconds}s"
+                ) from e
+            except httpx.HTTPStatusError as e:
+                raise BackendError(
+                    f"Backend HTTP error: {e.response.status_code}"
+                ) from e
+            except httpx.RequestError as e:
+                raise BackendError(
+                    f"Backend communication error: {str(e)}"
+                ) from e
 
 
 # -------------------------------------------------------------------
@@ -212,157 +409,104 @@ class BrainClientConfig:
 class BrainClient:
     """Stateless interface to reasoning model.
     
-    This class is a pure mechanical pass-through. It contains:
+    This class contains:
     - Zero intelligence
     - Zero behavior
     - Zero assumptions
     - Zero hidden state
     
-    All reasoning, decision-making, and intelligence resides
-    exclusively in the configured model backend.
+    All reasoning resides in the configured backend.
     """
     
     def __init__(self, config: BrainClientConfig):
-        """Initialize brain client with mechanical configuration.
+        """Initialize brain client.
         
         Args:
-            config: Configuration containing only mechanical settings
+            config: Complete brain client configuration
             
-        Note:
-            No behavioral configuration is accepted or stored.
+        Raises:
+            ValueError: If configuration is invalid
         """
-        self._config = config
-        self._logger = logging.getLogger(__name__)
-        
-        # Validate audit logging configuration
-        if config.enable_audit_logging and not _AUDIT_LOGGER.handlers:
-            raise RuntimeError(
-                "Audit logger has no handlers configured. "
-                "Configure logging handlers for 'brain_client_audit' logger "
-                "or disable audit logging."
+        # Trust BrainClientConfig validation
+        if not isinstance(config, BrainClientConfig):
+            raise ValueError(
+                f"config must be BrainClientConfig, got {type(config)}"
             )
         
-        # Log configuration for audit trail
-        self._logger.info(
-            "Brain client initialized with backend: %s",
-            type(config.model_backend).__name__
-        )
-    
-    def reason(self, input_data: BrainInput) -> ModelResponse:
-        """Pass structured input to model and return structured output.
+        self._config = config
         
-        This method:
-        1. Validates input structure (already done by BrainInput type)
-        2. Sends to configured backend
-        3. Receives raw response
-        4. Validates response matches schema
-        5. Returns response unchanged
-        6. Logs everything verbatim
+        # Initialize backend
+        self._backend = self._create_backend()
+    
+    def _create_backend(self) -> ModelBackend:
+        """Create configured backend instance.
+        
+        Returns:
+            Initialized model backend
+            
+        Raises:
+            ValueError: If backend configuration is invalid
+        """
+        if self._config.backend_type == BackendType.DEEPSEEK:
+            if not self._config.deepseek_config:
+                raise ValueError("DeepSeek backend requires deepseek_config")
+            return DeepSeekBackend(self._config.deepseek_config)
+        
+        raise ValueError(f"Unsupported backend: {self._config.backend_type}")
+    
+    def infer(self, input_data: BrainInput) -> ModelResponse:
+        """Pass structured input to model and return structured output.
         
         Args:
             input_data: Fully structured input containing:
                 - Current perceived state
                 - Recent actions
                 - Memory snapshot
+                - Request ID
                 
         Returns:
             ModelResponse: Raw, unmodified response from model
             
         Raises:
-            ValidationError: If input or output fails schema validation
-            RuntimeError: If backend fails mechanically
-            ValueError: If response fails structural validation
+            ValidationError: If input fails schema validation
+            BackendError: If backend fails mechanically
+            BackendTimeoutError: If backend call times out
+            BackendValidationError: If response fails structural validation
+            RuntimeError: If any other mechanical failure occurs
             
         Note:
-            - No retry logic is applied
-            - No optimization is performed
+            - No retry logic
+            - No optimization
             - No interpretation of content
             - No correction of reasoning
-            - No ranking or filtering
-            - No defaults are applied
+            - No defaults applied
+            - No side effects (logging, state mutation)
         """
-        # Input is already validated by BrainInput type
+        # Input validation is already done by BrainInput type
+        # Pydantic validation ensures schema compliance
         input_dict = input_data.model_dump()
-        
-        # Audit log input (verbatim, no filtering)
-        if self._config.enable_audit_logging:
-            self._audit_log("input", input_dict)
         
         try:
             # Mechanical transfer to backend
-            # No modification, no interpretation, no help
-            raw_response = self._config.model_backend.generate(input_dict)
+            raw_response = self._backend.generate(
+                input_dict, 
+                self._config.timeout_seconds,
+                self._config.max_tokens,
+                self._config.temperature
+            )
             
             # Validate response structure matches schema
-            # This validates FORM only, not CONTENT correctness
+            # This validates FORM only, not CONTENT
             response = ModelResponse(**raw_response)
-            
-            # Audit log output (verbatim, no filtering)
-            if self._config.enable_audit_logging:
-                self._audit_log("output", raw_response)
             
             return response
             
-        except ValidationError as e:
-            # Schema validation failure - mechanical issue
-            self._logger.error(
-                "Model response validation failed: %s",
-                str(e)
-            )
-            if self._config.enable_audit_logging:
-                self._audit_log("validation_error", {
-                    "input": input_dict,
-                    "error": str(e),
-                    "raw_response": raw_response if 'raw_response' in locals() else None
-                })
+        except (ValidationError, BackendError):
+            # Re-raise expected exception types unchanged
             raise
-            
         except Exception as e:
-            # Mechanical failure in backend
-            self._logger.error(
-                "Backend mechanical failure: %s",
-                str(e)
-            )
-            if self._config.enable_audit_logging:
-                self._audit_log("backend_error", {
-                    "input": input_dict,
-                    "error": str(e)
-                })
-            raise RuntimeError(f"Backend mechanical failure: {str(e)}")
-    
-    def _audit_log(self, log_type: str, data: Dict[str, Any]) -> None:
-        """Log data verbatim for audit trail.
-        
-        Args:
-            log_type: Type of log entry
-            data: Data to log (input, output, or error)
-            
-        Raises:
-            RuntimeError: If audit logging is enabled but no handler is configured
-            
-        Note:
-            No filtering, sanitization, or modification of data.
-            Logs exactly what was received/sent.
-        """
-        if not self._config.enable_audit_logging:
-            return
-        
-        # Double-check handler presence (may have been removed after initialization)
-        if not _AUDIT_LOGGER.handlers:
-            raise RuntimeError(
-                "Audit logger has no handlers configured during logging attempt. "
-                "Configure logging handlers for 'brain_client_audit' logger."
-            )
-        
-        audit_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "type": log_type,
-            "data": data
-        }
-        
-        _AUDIT_LOGGER.info(
-            json.dumps(audit_entry, default=str)
-        )
+            # Any other failure is mechanical
+            raise RuntimeError(f"Mechanical failure: {str(e)}") from e
 
 
 # -------------------------------------------------------------------
@@ -372,10 +516,15 @@ class BrainClient:
 __all__ = [
     "BrainClient",
     "BrainClientConfig",
+    "DeepSeekConfig",
+    "BackendType",
     "BrainInput",
     "ModelResponse",
     "PerceivedState",
     "RecentAction",
     "MemorySnapshot",
-    "ModelBackend"
+    "RawModelResponse",
+    "BackendError",
+    "BackendTimeoutError",
+    "BackendValidationError"
 ]
