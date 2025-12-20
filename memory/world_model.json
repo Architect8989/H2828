@@ -1,0 +1,20 @@
+{
+  "host": {
+    "os": null,
+    "kernel": null,
+    "resolution": null,
+    "boot_timestamp": null
+  },
+  "applications": {},
+  "ui_elements": {},
+  "affordances": {},
+  "motor": {
+    "mouse_latency_ms": null,
+    "keyboard_latency_ms": null,
+    "error_rate": null
+  },
+  "skills": {},
+  "unknowns": [],
+  "novelty_score": 1.0,
+  "last_update": null
+}
