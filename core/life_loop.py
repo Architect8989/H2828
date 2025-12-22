@@ -1,234 +1,253 @@
 """
-Epistemic Governor - Environment Mastery Engine
+EXECUTION PROTOCOL OF REALITY
+Environment Mastery Engine - Life Loop Module
 
-Absolute epistemic constraint: No action may complete without producing
-a valid, persistent update to the World Model.
-
-This module is the execution boundary - the narrow waist of the system.
-It defines what it means for EME to be real.
-
-If removed, the system must not function.
+One-sentence contract: Execute one action, measure what happened, record outcome.
+Violation is fatal to truth.
 """
 
-from typing import Any, Dict
+import time
 from dataclasses import dataclass
+from typing import Optional, List
+from datetime import datetime
+import hashlib
 
-
-@dataclass(frozen=True)
+# Type definitions (provided by other modules)
+@dataclass
 class Action:
-    """Explicit action contract for EME execution."""
-    type: str
-    parameters: Dict[str, Any]
+    """External action to execute."""
+    id: str
+    fingerprint: str  # Cryptographic hash of action definition
+    executable_call: callable
     
-    def __post_init__(self) -> None:
-        """Validate action structure on creation."""
-        if not isinstance(self.type, str):
-            raise ValueError(f"Action.type must be str, got {type(self.type)}")
-        if not isinstance(self.parameters, dict):
-            raise ValueError(f"Action.parameters must be dict, got {type(self.parameters)}")
+@dataclass
+class PerceptionSnapshot:
+    """Raw sensory data from environment."""
+    timestamp: datetime
+    data: dict
+    reliability_score: float
 
+@dataclass 
+class Delta:
+    """Measured change in environment."""
+    timestamp: datetime
+    change_type: str
+    before_state: dict
+    after_state: dict
+    confidence: float
 
-class EpistemicViolation(Exception):
-    """Raised when Prime Directive is violated."""
-    def __init__(self, violation: str, context: dict):
-        super().__init__(f"EpistemicViolation: {violation}")
-        self.violation = violation
+@dataclass
+class ExperimentResult:
+    """Pure factual record of what occurred."""
+    experiment_id: str
+    action_id: str
+    action_fingerprint: str
+    time_window: tuple  # (start, end)
+    deltas: List[Delta]
+    attribution_confident: bool
+
+# --- MODULE BOUNDARIES (imported dependencies) ---
+def execute_action(action: Action) -> None:
+    """External executor - calls OS/API."""
+    pass
+
+def capture_perception_snapshot() -> PerceptionSnapshot:
+    """External perception system."""
+    pass
+
+def compute_changes(
+    before: PerceptionSnapshot, 
+    after: PerceptionSnapshot
+) -> List[Delta]:
+    """External change detector."""
+    pass
+
+def validate_delta_integrity(
+    delta: Delta,
+    action_window: tuple
+) -> bool:
+    """External validator."""
+    pass
+
+def record_to_action_ledger(
+    experiment_id: str,
+    action: Action,
+    time_window: tuple,
+    deltas: List[Delta]
+) -> None:
+    """External causal record keeper."""
+    pass
+
+def update_env_graph(deltas: List[Delta]) -> None:
+    """External navigation memory."""
+    pass
+# --- END MODULE BOUNDARIES ---
+
+class RealityViolation(Exception):
+    """Raised when truth cannot be guaranteed."""
+    def __init__(self, experiment_id: str, context: str):
+        self.experiment_id = experiment_id
         self.context = context
-
+        super().__init__(f"REALITY VIOLATION [{experiment_id}]: {context}")
 
 class LifeLoop:
     """
-    Epistemic governor enforcing Action → Delta → World Model invariant.
+    Boring, strict, unforgiving gatekeeper.
+    No intelligence. No agency. No optimization.
     
-    This module is:
-    1. The execution boundary - all actions must pass through here
-    2. The epistemic gatekeeper - validates deltas before state updates
-    3. The failure mechanism - crashes loudly on violations
-    
-    This module is NOT:
-    1. An intelligence layer (no planning, reasoning, interpretation)
-    2. An orchestrator (no sequencing, retries, optimization)
-    3. An agent (no goals, memory, learning)
-    
-    World Model Interface Contract:
-    - apply_delta(delta) must raise an exception on failure
-    - persist() must raise an exception on failure
-    - Silent returns or success signals are forbidden
-    
-    Delta Interface Contract:
-    - Must have is_valid() method returning bool
-    - Must have is_empty() method returning bool
-    - Must have changes attribute/property exposing immutable state
+    PUBLIC API RULE: Only LifeLoop.run_experiment() exists.
+    No module-level wrappers. No alternate entry points.
     """
     
-    def __init__(
-        self,
-        world_model,  # Type hint removed due to circular import
-        action_executor  # Type hint removed due to circular import
-    ) -> None:
+    def __init__(self, observation_delay: float = 0.5, delta_confidence_threshold: float = 0.9):
         """
-        Initialize epistemic governor.
+        observation_delay: Explicit bounded wait after action (seconds)
+        delta_confidence_threshold: Minimum confidence for attribution (0.0-1.0)
+                                   Changes below this threshold mark attribution_confident=False
+        """
+        self.observation_delay = observation_delay
+        self.delta_confidence_threshold = delta_confidence_threshold
         
-        Args:
-            world_model: Authoritative World Model instance that must:
-                         - Have apply_delta(delta) that raises on failure
-                         - Have persist() that raises on failure
-                         - Never return silent success signals
-            action_executor: Constrained executor that returns deltas and
-                             must have execute(action) method
-                             
-        Raises:
-            EpistemicViolation: If world_model is missing
-            TypeError: If interfaces are incorrect or lack required methods
+        # Explicit state lock for anti-overlap
+        self._experiment_in_progress = False
+        
+    def run_experiment(self, action: Action) -> ExperimentResult:
         """
-        # Require authoritative World Model (Hard Constraint #2)
-        if world_model is None:
-            raise EpistemicViolation(
-                violation="MISSING_WORLD_MODEL",
-                context={"message": "System requires authoritative World Model"}
+        Execute exactly one action and measure exactly what happened.
+        
+        This is the only public operation allowed by the module.
+        """
+        # --- STATE LOCK: Prevent overlapping experiments ---
+        if self._experiment_in_progress:
+            raise RealityViolation(
+                "pre-start",
+                "Experiment already in progress. Overlapping experiments forbidden."
             )
         
-        # Validate World Model interface
-        required_wm_methods = ['apply_delta', 'persist']
-        for method in required_wm_methods:
-            if not hasattr(world_model, method):
-                raise TypeError(
-                    f"world_model must have {method} method"
-                )
+        experiment_id = self._generate_experiment_id()
         
-        # Validate action executor interface
-        if not hasattr(action_executor, 'execute'):
-            raise TypeError(
-                f"action_executor must have execute method, got {type(action_executor)}"
-            )
-        
-        self._world_model = world_model
-        self._action_executor = action_executor
-    
-    def _select_exploration_action(self) -> Action:
-        """
-        Placeholder action selection (non-intelligent).
-        
-        Returns:
-            A single exploration action with explicit structure
+        try:
+            self._experiment_in_progress = True
             
-        Note:
-            This is placeholder logic only. Real action selection must be
-            implemented externally and submitted to this loop.
-        """
-        # Explicit Action structure - no anonymous objects
-        return Action(type="explore", parameters={})
-    
-    def _validate_delta(self, delta) -> None:
-        """
-        Validate delta structure and content using behavioral interface.
-        
-        Args:
-            delta: Delta to validate (must satisfy Delta Interface Contract)
+            # Step 1 & 2: Capture pre-snapshot at action start
+            pre_snapshot = capture_perception_snapshot()
+            action_start = datetime.now()
             
-        Raises:
-            EpistemicViolation: If delta violates interface contract
-        """
-        if delta is None:
-            raise EpistemicViolation(
-                violation="MISSING_DELTA",
-                context={"message": "Action returned no delta"}
+            # Step 3: Execute exactly one action
+            self._execute_single_action(action)
+            
+            # Step 4: Record action end
+            action_end = datetime.now()
+            time_window = (action_start, action_end)
+            
+            # Step 5: Wait bounded explicit observation delay
+            time.sleep(self.observation_delay)
+            
+            # Step 6: Capture post-snapshot
+            post_snapshot = capture_perception_snapshot()
+            
+            # Step 7: Measure changes using change detector
+            deltas = compute_changes(pre_snapshot, post_snapshot)
+            
+            # Step 8: Validate delta integrity
+            validated_deltas = []
+            attribution_confident = True
+            
+            for delta in deltas:
+                is_valid = validate_delta_integrity(delta, time_window)
+                
+                if not is_valid:
+                    # Time attribution unclear → abort immediately
+                    raise RealityViolation(
+                        experiment_id,
+                        f"Delta timestamp {delta.timestamp} outside action window {time_window}"
+                    )
+                
+                # Use explicit threshold from constructor
+                if delta.confidence < self.delta_confidence_threshold:
+                    attribution_confident = False
+                
+                validated_deltas.append(delta)
+            
+            # Step 9: Attribution already performed during validation
+            # Deltas are only included if timestamp falls in action window
+            
+            # Step 10: Record causality in action ledger
+            record_to_action_ledger(
+                experiment_id=experiment_id,
+                action=action,
+                time_window=time_window,
+                deltas=validated_deltas
             )
-        
-        # Behavioral interface validation - no class name checks
-        required_attributes = ['is_valid', 'is_empty']
-        for attr in required_attributes:
-            if not hasattr(delta, attr):
-                raise EpistemicViolation(
-                    violation="INVALID_DELTA_INTERFACE",
-                    context={
-                        "message": f"Delta missing required attribute: {attr}",
-                        "delta_type": type(delta).__name__
-                    }
-                )
-        
-        # Method must be callable
-        if not callable(delta.is_valid) or not callable(delta.is_empty):
-            raise EpistemicViolation(
-                violation="INVALID_DELTA_INTERFACE",
-                context={"message": "Delta attributes must be callable methods"}
+            
+            # Step 11: Update navigation memory
+            if attribution_confident:
+                update_env_graph(validated_deltas)
+            
+            # Step 12: Return factual result (no success/failure judgement)
+            result = ExperimentResult(
+                experiment_id=experiment_id,
+                action_id=action.id,
+                action_fingerprint=action.fingerprint,
+                time_window=time_window,
+                deltas=validated_deltas,
+                attribution_confident=attribution_confident
             )
-        
-        # Execute validation
-        if not delta.is_valid():
-            raise EpistemicViolation(
-                violation="INVALID_DELTA_STRUCTURE",
-                context={
-                    "message": "Delta.is_valid() returned False",
-                    "delta_type": type(delta).__name__
-                }
-            )
-        
-        if delta.is_empty():
-            raise EpistemicViolation(
-                violation="EMPTY_DELTA",
-                context={
-                    "message": "Delta.is_empty() returned True",
-                    "delta_type": type(delta).__name__
-                }
-            )
+            
+            return result
+            
+        except Exception as e:
+            # Failure is loud, failure stops everything
+            if not isinstance(e, RealityViolation):
+                raise RealityViolation(
+                    experiment_id,
+                    f"Unexpected failure: {str(e)}"
+                ) from e
+            raise
+        finally:
+            # Always release the state lock, even on failure
+            self._experiment_in_progress = False
     
-    def run_iteration(self) -> None:
+    def _execute_single_action(self, action: Action) -> None:
         """
-        Execute one iteration of Action → Delta → World Model.
+        Execute action with isolation guarantees.
         
-        Control Flow:
-        1. Select single exploration action (placeholder)
-        2. Execute action via constrained executor
-        3. Validate presence and validity of delta
-        4. Apply delta to World Model (must raise on failure)
-        5. Persist World Model state (must raise on failure)
-        
-        Raises:
-            EpistemicViolation: If Prime Directive is violated
-            Exception: Any underlying exception (propagated without interpretation)
+        FINGERPRINT SEMANTICS:
+        The fingerprint check is a GUARD against action corruption during transmission.
+        It is NOT a full cryptographic identity of the action's effects.
+        The authoritative action identity is maintained by action_ledger.
         """
-        # 1. Select action (placeholder - real selection happens externally)
-        action = self._select_exploration_action()
+        computed_fingerprint = self._compute_action_fingerprint(action)
+        if computed_fingerprint != action.fingerprint:
+            raise RealityViolation(
+                "pre-execution",
+                f"Action fingerprint mismatch: {computed_fingerprint} != {action.fingerprint}"
+            )
         
-        # 2. Execute action and obtain delta (Hard Constraint #1, #3)
-        delta = self._action_executor.execute(action)
-        
-        # 3. Validate delta (Hard Constraint #3)
-        self._validate_delta(delta)
-        
-        # 4. Apply delta to World Model (contract: raises on failure)
-        self._world_model.apply_delta(delta)
-        
-        # 5. Persist state (Hard Constraint: persistent update, raises on failure)
-        self._world_model.persist()
-
-
-# Export public interface
-__all__ = ["LifeLoop", "EpistemicViolation", "Action"]            - No state maintained between calls
-            - No logging or side effects
-            - Exact one-pass execution only
+        # Exactly one execution, no retries
+        execute_action(action)
+    
+    def _generate_experiment_id(self) -> str:
+        """Generate unique, reproducible experiment ID."""
+        timestamp = datetime.now().isoformat()
+        nonce = str(time.perf_counter_ns())
+        return hashlib.sha256(f"{timestamp}:{nonce}".encode()).hexdigest()[:16]
+    
+    def _compute_action_fingerprint(self, action: Action) -> str:
         """
-        # Normalize vision outputs without interpretation
-        vision_output = self._vision_client.process_vision_output(
-            ocr_output=ocr_output,
-            ui_parser_output=ui_parser_output,
-            vlm_output=vlm_output,
-            object_detector_output=object_detector_output,
-            screen_dimensions=screen_dimensions,
-            screen_timestamp=screen_timestamp,
-            input_hash=input_hash
-        )
+        Compute deterministic fingerprint of action.
         
-        # Infer action sequence without interpretation
-        action_sequence = self._brain_client.infer(vision_output)
+        NOTE: This is a SIMPLE GUARD, not a full identity.
+        It ensures basic action integrity but does NOT capture:
+        - Action parameters
+        - Environmental context  
+        - Dynamic call arguments
         
-        # Execute sequence without interpretation
-        self._action_executor.execute_sequence(action_sequence)
-        
-        return action_sequence
+        The action_ledger maintains authoritative action identity.
+        """
+        action_repr = f"{action.id}:{action.executable_call.__name__}"
+        return hashlib.sha256(action_repr.encode()).hexdigest()[:16]
 
-
-# Export public interface
-__all__ = ["LifeLoop"]
-
+# --- PUBLIC INTERFACE ---
+# Only one allowed public entity: the LifeLoop class
+__all__ = ['LifeLoop']
