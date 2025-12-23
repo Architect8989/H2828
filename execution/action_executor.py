@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Union, Tuple
 
+from core.logger import log_event
 from execution.backend import OSBackend, MouseButton, Key
 
 
@@ -41,6 +42,13 @@ class Action:
     """
     type: ActionType
     parameters: Union[Tuple[int, int], MouseButton, Key]
+    
+    # [SUGGESTION] Add __str__ method for better logging
+    # def __str__(self) -> str:
+    #     if self.type == ActionType.MOVE:
+    #         x, y = self.parameters
+    #         return f"{self.type.name} ({x}, {y})"
+    #     return f"{self.type.name} {self.parameters}"
 
 
 class ActionExecutor:
@@ -71,6 +79,11 @@ class ActionExecutor:
             ValueError: If action type is unsupported
             Any exception raised by the backend
         """
+        # [SUGGESTION] Could improve parameter formatting for MOVE action
+        # Current format: ACTION_ATTEMPT move (100, 100)
+        # Alternative: ACTION_ATTEMPT MOVE x=100 y=100
+        log_event(f"ACTION_ATTEMPT {action.type.value} {action.parameters}")
+        
         if action.type == ActionType.MOVE:
             self._execute_move(action.parameters)
         elif action.type == ActionType.MOUSE_DOWN:
@@ -104,3 +117,25 @@ class ActionExecutor:
     def _execute_key_up(self, parameters: Key) -> None:
         """Route key_up action to key release."""
         self._backend.key_up(parameters)
+    
+    # [SUGGESTION] Optional helper method for creating actions with validation
+    # @staticmethod
+    # def create_action(
+    #     action_type: ActionType, 
+    #     parameters: Union[Tuple[int, int], MouseButton, Key]
+    # ) -> Action:
+    #     """Create and validate an Action with appropriate parameter type checking."""
+    #     if action_type == ActionType.MOVE:
+    #         if not isinstance(parameters, tuple) or len(parameters) != 2:
+    #             raise ValueError("MOVE action requires tuple (x, y)")
+    #         x, y = parameters
+    #         if not isinstance(x, int) or not isinstance(y, int):
+    #             raise ValueError("MOVE coordinates must be integers")
+    #     elif action_type in (ActionType.MOUSE_DOWN, ActionType.MOUSE_UP):
+    #         if not isinstance(parameters, MouseButton):
+    #             raise ValueError(f"{action_type} requires MouseButton parameter")
+    #     elif action_type in (ActionType.KEY_DOWN, ActionType.KEY_UP):
+    #         if not isinstance(parameters, Key):
+    #             raise ValueError(f"{action_type} requires Key parameter")
+    #     
+    #     return Action(type=action_type, parameters=parameters)
