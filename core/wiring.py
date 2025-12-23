@@ -66,6 +66,25 @@ class DeltaValidator:
             time_window: (start, end) tuple of action timing
             
         Returns:
+            bool: True if delta can be temporally attributed, False otherwise
+        """
+        # Rule 1: delta must have timestamp attribute
+        if not hasattr(delta, 'timestamp'):
+            return False
+        
+        # Rule 2: time_window must be valid (start, end) tuple
+        if not isinstance(time_window, tuple) or len(time_window) != 2:
+            return False
+        
+        start_time, end_time = time_window
+        
+        # Rule 3: delta timestamp must fall within action attribution window
+        # Using direct temporal containment without grace windows
+        return start_time <= delta.timestamp <= end_time        Args:
+            delta: Delta object to validate
+            time_window: (start, end) tuple of action timing
+            
+        Returns:
             bool: True if delta is attributable, False otherwise
         """
         # Implementation will be provided by the perception module
