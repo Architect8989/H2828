@@ -1,0 +1,12 @@
+[tool.poetry]
+name = "eme-core"
+version = "0.1.0"
+description = "Environment Mastery Engine Core"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+opencu = "*"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
