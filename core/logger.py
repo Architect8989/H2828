@@ -1,48 +1,46 @@
-"""
-EME-Core Logging Primitive
-Truth-preserving append-only recorder - no interpretation, no analysis.
-"""
 
 import os
 import datetime
-from typing import NoReturn
+import json
 
 
-def _write_log_entry(log_file: str, message: str) -> None:
-    """
-    Internal write operation with silent failure.
-    No retries, no exceptions, no output.
-    """
+def _ensure_dir(path):
     try:
-        # Build the complete line with timestamp
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+
+
+def _write_text_log(log_file, message):
+    try:
+        _ensure_dir(log_file)
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(
             timespec='milliseconds'
         ).replace('+00:00', 'Z')
         line = f"{timestamp} | {message}\n"
-        
-        # Append with immediate flush
         with open(log_file, 'a', buffering=1) as f:
             f.write(line)
     except Exception:
-        # Fail silently - do nothing, no retries
         pass
 
 
-def log_event(message: str) -> None:
-    """
-    Record a factual event in events.log.
-    
-    Args:
-        message: Plain string describing the fact
-    """
-    _write_log_entry('logs/events.log', message)
+def _write_json_log(log_file, record):
+    try:
+        _ensure_dir(log_file)
+        line = json.dumps(record) + "\n"
+        with open(log_file, 'a', buffering=1) as f:
+            f.write(line)
+    except Exception:
+        pass
 
 
-def log_crash(message: str) -> None:
-    """
-    Record a crash event in crashes.log.
-    
-    Args:
-        message: Plain string describing the crash
-    """
-    _write_log_entry('logs/crashes.log', message)
+def log_experiment(record):
+    _write_json_log('logs/experiments.jsonl', record)
+
+
+def log_event(message):
+    _write_text_log('logs/events.log', message)
+
+
+def log_crash(message):
+    _write_text_log('logs/crashes.log', message)
