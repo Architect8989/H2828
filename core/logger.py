@@ -1,48 +1,52 @@
-"""
-EME-Core Logging Primitive
-Truth-preserving append-only recorder - no interpretation, no analysis.
-"""
-
 import os
-import datetime
-from typing import NoReturn
+import json
+import time
+from pathlib import Path
 
+LOG_DIR = Path("logs")
+EXPERIMENT_LOG = LOG_DIR / "experiments.jsonl"
+EVENTS_LOG = LOG_DIR / "events.log"
+CRASH_LOG = LOG_DIR / "crashes.log"
 
-def _write_log_entry(log_file: str, message: str) -> None:
-    """
-    Internal write operation with silent failure.
-    No retries, no exceptions, no output.
-    """
+def _ensure_dir(path: Path):
     try:
-        # Build the complete line with timestamp
-        timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat(
-            timespec='milliseconds'
-        ).replace('+00:00', 'Z')
-        line = f"{timestamp} | {message}\n"
-        
-        # Append with immediate flush
-        with open(log_file, 'a', buffering=1) as f:
-            f.write(line)
+        path.parent.mkdir(parents=True, exist_ok=True)
     except Exception:
-        # Fail silently - do nothing, no retries
+        pass
+
+class Logger:
+    """
+    Append-only structured experiment logger.
+    One JSON object per line. No interpretation.
+    """
+    def __init__(self, path: Path = EXPERIMENT_LOG):
+        self.path = path
+        _ensure_dir(self.path)
+
+    def record(self, record: dict) -> None:
+        try:
+            line = json.dumps(record, ensure_ascii=False)
+            with open(self.path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+
+def log_event(message: str):
+    try:
+        _ensure_dir(EVENTS_LOG)
+        ts = time.time()
+        with open(EVENTS_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{ts} | {message}\n")
+    except Exception:
         pass
 
 
-def log_event(message: str) -> None:
-    """
-    Record a factual event in events.log.
-    
-    Args:
-        message: Plain string describing the fact
-    """
-    _write_log_entry('logs/events.log', message)
-
-
-def log_crash(message: str) -> None:
-    """
-    Record a crash event in crashes.log.
-    
-    Args:
-        message: Plain string describing the crash
-    """
-    _write_log_entry('logs/crashes.log', message)
+def log_crash(message: str):
+    try:
+        _ensure_dir(CRASH_LOG)
+        ts = time.time()
+        with open(CRASH_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{ts} | {message}\n")
+    except Exception:
+        pass
